@@ -1,0 +1,10 @@
+[project]
+name = "file-io-part2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["duplicate"]
+
+[tool.uv.sources]
+duplicate = {path = "../week1/duplicate", editable=true}

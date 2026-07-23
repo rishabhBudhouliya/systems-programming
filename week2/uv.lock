@@ -1,0 +1,19 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "duplicate"
+version = "0.1.0"
+source = { editable = "../week1/duplicate" }
+
+[[package]]
+name = "file-io-part2"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "duplicate" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "duplicate", editable = "../week1/duplicate" }]
