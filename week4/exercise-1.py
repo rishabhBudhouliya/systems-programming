@@ -10,6 +10,7 @@ Design a multi-write pipe consistency test
 def pipe_concurrent_writes(N: int):
     # common pipe meant to be used by all
     (r, w) = os.pipe()
+    os.set_blocking(w, False)
     # attempt to create 4 processess
     pids = []
     for i in range(4):
@@ -22,7 +23,12 @@ def pipe_concurrent_writes(N: int):
 
     if pid == 0:
         try:
-            os.write(w, bytes([65 + counter]) * N)
+            payload = bytes([65 + counter]) * N
+            n = os.write(w, payload)
+            if n < len(payload):
+                print(f"writer {counter}: {'TORN' if n < len(payload) else 'intact'} ({n}/{N})")
+        except BlockingIOError:
+            print(f"writer {counter}: EAGAIN - nothing written")
         finally:
             os.close(w)
             os._exit(0)
@@ -41,7 +47,7 @@ def pipe_concurrent_writes(N: int):
             (_, status) = os.waitpid(pid, 0)
             print(f"Wait pid for {pid} with exit code: {os.waitstatus_to_exitcode(status)}")
 
-
+# this checker's objective: each writer's messages are recoverable, intact and in-order
 # should check against 4 processes that is hardcoded
 def checker(buf: bytes, N: int) -> bool:
     output = buf.decode()
