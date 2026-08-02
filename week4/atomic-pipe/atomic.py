@@ -57,8 +57,10 @@ class Pipe:
             last_bit = first >> 6 and 1
             if not last_bit:
                 print("entering the non last bit zone")
-                header = int.from_bytes(itr_buffer[pointer:3], "big")
-                print(f"here's the header: {itr_buffer[pointer:3].hex(' ')}")
+                header = int.from_bytes(itr_buffer[pointer : pointer + 3], "big")
+                print(
+                    f"here's the header: {itr_buffer[pointer : pointer + 3].hex(' ')}"
+                )
                 pointer += 3
                 id = header & ((1 << 22) - 1)
                 print(
@@ -74,11 +76,11 @@ class Pipe:
                 pointer += pointer + self.PAYLOAD_SIZE_LIMIT
             else:
                 print("entering the last bit zone")
-                header = int.from_bytes(itr_buffer[pointer:3], "big")
+                header = int.from_bytes(itr_buffer[pointer : pointer + 3], "big")
                 id = header & ((1 << 22) - 1)
                 print(f"the header is: {header} process id: {id} and pids are: {pids}")
                 pointer += 3
-                size = int.from_bytes(itr_buffer[pointer:5], "big")
+                size = int.from_bytes(itr_buffer[pointer : pointer + 2], "big")
                 if size == 0:
                     print("nothing to read, breaking from loop")
                     break
@@ -89,7 +91,9 @@ class Pipe:
                 else:
                     seen[id] = [itr_buffer[pointer : pointer + size]]
                 pointer += size
+                print(f"pointer is at: {pointer} vs buffer is: {len(itr_buffer)}")
             count += 1
+            assert pointer == len(itr_buffer)
         return seen
 
     def close_read(self):
