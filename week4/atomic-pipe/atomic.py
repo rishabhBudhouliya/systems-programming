@@ -43,7 +43,6 @@ class Pipe:
     # read with offset
     def read(self, seen: dict, chunk_size: int, pids):
         buf = os.read(self.r, 4095)
-        print(f"buffer being read is: {buf}")
         if buf == b"":
             raise ValueError("End of buffer")
         # buf is bytes, now check for header and payload
@@ -73,7 +72,10 @@ class Pipe:
                     )
                 else:
                     seen[id] = [itr_buffer[pointer : pointer + self.PAYLOAD_SIZE_LIMIT]]
-                pointer += pointer + self.PAYLOAD_SIZE_LIMIT
+                pointer += self.PAYLOAD_SIZE_LIMIT
+                print(
+                    f"non last bit section: pointer is at: {pointer} vs buffer is: {len(itr_buffer)}"
+                )
             else:
                 print("entering the last bit zone")
                 header = int.from_bytes(itr_buffer[pointer : pointer + 3], "big")
@@ -91,7 +93,9 @@ class Pipe:
                 else:
                     seen[id] = [itr_buffer[pointer : pointer + size]]
                 pointer += size
-                print(f"pointer is at: {pointer} vs buffer is: {len(itr_buffer)}")
+                print(
+                    f"last bit section: pointer is at: {pointer} vs buffer is: {len(itr_buffer)}"
+                )
             count += 1
         assert pointer == len(itr_buffer)
         return seen
@@ -154,7 +158,6 @@ def pipe_concurrent_writes(N: int):
         try:
             payload = bytes([65 + counter]) * N
             current_pid = os.getpid()
-            print(f"payload is {payload} with child pid: {current_pid}")
             p.write(current_pid, payload)
             # n = os.write(p.w, payload)
             # if n < len(payload):
@@ -224,37 +227,7 @@ def checker(seen: dict, N: int, pids: list) -> bool:
 def main():
     N = 10000
     payload = bytes([65]) * N
-    # result = chunk(10235, payload, 4096)
-    # # i know that each ch
-    # count = 0
-    # for ch in result:
-    #     itr_chunk = bytearray(ch)
-    #     first = itr_chunk[0]
-    #     last_bit = (first >> 6 and 1)
-    #     if last_bit:
-    #         header = int.from_bytes(itr_chunk[0:3], "big")
-    #         size_payload = int.from_bytes(itr_chunk[3:5], "big")
-    #         payload = itr_chunk[5:]
-    #         count+=size_payload
-    #     else:
-    #         header = int.from_bytes(itr_chunk[0:3], "big")
-    #         payload = itr_chunk[3:]
-    #         count+=4092
-    #         assert len(payload) == 4092
-    # assert count == (4092 + 4092 + 1092)
-
-    ###### Testing the atomic pipe
-    # p = Pipe()
-    # pids = [10112]
-    # for pid in pids:
-    #     p.write(pid, payload)
-
-    # answer = {}
-    # answer = p.read(answer, 4096)
-    # p.read(answer, 4096)
-    # p.read(answer, 4096)
-    # print(f"here the final updated answer: {answer}")
-    pipe_concurrent_writes(1000)
+    pipe_concurrent_writes(10000)
     # p.close()
     # atomic_pipe()
 
