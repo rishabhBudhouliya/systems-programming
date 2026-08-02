@@ -10,7 +10,7 @@ Design a multi-write pipe consistency test
 def pipe_concurrent_writes(N: int):
     # common pipe meant to be used by all
     (r, w) = os.pipe()
-    os.set_blocking(w, False)
+    os.set_blocking(w, True)
     # attempt to create 4 processess
     pids = []
     for i in range(4):
