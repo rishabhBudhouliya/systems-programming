@@ -93,7 +93,7 @@ class Pipe:
                 pointer += size
                 print(f"pointer is at: {pointer} vs buffer is: {len(itr_buffer)}")
             count += 1
-            assert pointer == len(itr_buffer)
+        assert pointer == len(itr_buffer)
         return seen
 
     def close_read(self):
@@ -189,7 +189,7 @@ def pipe_concurrent_writes(N: int):
             # buf += chunk
         print(f"seen is {seen}")
         # print(f"read buffer is: {len(seen)}")
-        print(f"writes are consistent : {checker(buf, N)}")
+        print(f"writes are consistent : {checker(seen, N, pids)}")
         for pid in pids:
             (_, status) = os.waitpid(pid, 0)
             print(
@@ -197,18 +197,28 @@ def pipe_concurrent_writes(N: int):
             )
 
 
-def checker(buf: bytes, N: int) -> bool:
-    output = buf.decode()
-    runs = [(k, len(list(g))) for k, g in groupby(output)]
-    totals = Counter()
-    for k, n in runs:
-        totals[k] += n
-    print(totals)
-    if len(runs) > 4:
-        print("".join(k for k, _ in runs))
-        print([(k, n // 4096) for k, n in runs])
-        print("Write might be torn!!")
-    return len(runs) == 4
+def checker(seen: dict, N: int, pids: list) -> bool:
+    for key, value in seen.items():
+        assert key in pids
+        messages = []
+        for message in value:
+            messages.extend(message)
+        assert len(messages) == N
+    return True
+
+
+# def checker(buf: bytes, N: int) -> bool:
+#     output = buf.decode()
+#     runs = [(k, len(list(g))) for k, g in groupby(output)]
+#     totals = Counter()
+#     for k, n in runs:
+#         totals[k] += n
+#     print(totals)
+#     if len(runs) > 4:
+#         print("".join(k for k, _ in runs))
+#         print([(k, n // 4096) for k, n in runs])
+#         print("Write might be torn!!")
+#     return len(runs) == 4
 
 
 def main():
@@ -244,7 +254,7 @@ def main():
     # p.read(answer, 4096)
     # p.read(answer, 4096)
     # print(f"here the final updated answer: {answer}")
-    pipe_concurrent_writes(1)
+    pipe_concurrent_writes(1000)
     # p.close()
     # atomic_pipe()
 
