@@ -36,63 +36,63 @@ class Pipe:
 
     def read(self) -> (int, list):
         # step 1: read from the os.read()
-        buf = os.read(self.r, 4092)
-        if len(buf) < 1:
-            print(f"Buffer is invalid: {len(buf)}")
-            return None
-        self.tail_buf.extend(buf)
-        # step 2: do I have a complete frame? if not, return with an empty message
-        ptx = 0
-        while ptx < len(self.tail_buf):
-            # Case 1: we have an incomplete header ( < 3 bytes)
-            # check for a 3 byte header
-            first = self.tail_buf[ptx]
-            last_bit = first >> 6 and 1
-            if len(self.tail_buf[ptx:]) < 3:
-                # we don't have enough to read the header
-                break
-            if not last_bit:
-                header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
-                id = header & ((1 << 22) - 1)
-                # if the tail buffer has 4092 bytes worth of data:
-                if len(self.tail_buf[ptx:]) < 4092:
+        while len(self.ready_buf) == 0:
+            buf = os.read(self.r, 4092)
+            if len(buf) < 1:
+                print(f"Buffer is invalid: {len(buf)}")
+                continue
+            self.tail_buf.extend(buf)
+            # step 2: do I have a complete frame? if not, return with an empty message
+            ptx = 0
+            while ptx < len(self.tail_buf):
+                # Case 1: we have an incomplete header ( < 3 bytes)
+                # check for a 3 byte header
+                first = self.tail_buf[ptx]
+                last_bit = first >> 6 and 1
+                if len(self.tail_buf[ptx:]) < 3:
+                    # we don't have enough to read the header
                     break
-                # only commit the pointer when a frame is confirmed
-                ptx += 3
-                # if not, we have a complete frame
-                if id in self.accumulator:
-                    self.accumulator[id].extend(self.tail_buf[ptx : ptx + 4092])
+                if not last_bit:
+                    header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
+                    id = header & ((1 << 22) - 1)
+                    header_size = 3
+                    # if the tail buffer has 4092 bytes worth of data:
+                    if len(self.tail_buf[header_size:]) < 4092:
+                        break
+                    # only commit the pointer when a frame is confirmed
+                    ptx += 3
+                    # if not, we have a complete frame
+                    if id in self.accumulator:
+                        self.accumulator[id].extend(self.tail_buf[ptx : ptx + 4092])
+                    else:
+                        self.accumulator[id] = self.tail_buf[ptx : ptx + 4092]
+                    ptx += 4092
                 else:
-                    self.accumulator[id] = self.tail_buf[ptx : ptx + 4092]
-                ptx += 4092
-            else:
-                if len(self.tail_buf[ptx:]) < 5:
-                    break
-                # the header is 5 bytes
-                header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
-                id = header & ((1 << 22) - 1)
-                size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
-                if size == 0:
-                    print("nothing to read, breaking from loop")
-                    break
-                if len(self.tail_buf[ptx : ptx + size]) < size:
-                    break
-                # only commit the pointer when a frame is confirmed
-                ptx += 5
-                if id in self.accumulator:
-                    self.accumulator[id].extend(self.tail_buf[ptx : ptx + size])
-                else:
-                    self.accumulator[id] = self.tail_buf[ptx : ptx + size]
-                ptx += size
-                # if I am writing a terminal/last frame, I can push the entire message to the ready output queue
-                self.ready_buf.append((id, self.accumulator[id]))
-                del self.accumulator[id]
-        # if we've traversed a frame, or found out an incomplete one, let's flush the buffer
-        del self.tail_buf[0:ptx]
-        if len(self.ready_buf) == 0:
-            self.read()
-        else:
-            return self.ready_buf.popleft()
+                    if len(self.tail_buf[ptx:]) < 5:
+                        break
+                    # the header is 5 bytes
+                    header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
+                    id = header & ((1 << 22) - 1)
+                    size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
+                    header_size = 5
+                    if size == 0:
+                        print("nothing to read, breaking from loop")
+                        break
+                    if len(self.tail_buf[header_size : header_size + size]) < size:
+                        break
+                    # only commit the pointer when a frame is confirmed
+                    ptx += 5
+                    if id in self.accumulator:
+                        self.accumulator[id].extend(self.tail_buf[ptx : ptx + size])
+                    else:
+                        self.accumulator[id] = self.tail_buf[ptx : ptx + size]
+                    ptx += size
+                    # if I am writing a terminal/last frame, I can push the entire message to the ready output queue
+                    self.ready_buf.append((id, self.accumulator[id]))
+                    del self.accumulator[id]
+            # if we've traversed a frame, or found out an incomplete one, let's flush the buffer
+            del self.tail_buf[0:ptx]
+        return self.ready_buf.popleft()
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
