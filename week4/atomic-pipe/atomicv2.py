@@ -2,6 +2,27 @@ import os
 from collections import deque
 
 
+class Message:
+    def __init__(self, id: int, last: int, payload: bytes):
+        self.id = id
+        self.last = last
+        self.payload = payload
+        self.BUF = 4096
+
+    def convert(self) -> bytes:
+        shift = 22
+        if self.last:
+            word = self.id | ((self.last & 1) << 22)
+            return (
+                word.to_bytes(3, "big")
+                + len(self.payload).to_bytes(2, "big")
+                + self.payload
+            )
+        else:
+            word = self.id | ((self.last & 1) << 22)
+            return word.to_bytes(3, "big") + self.payload
+
+
 class Pipe:
     """
     A pipe holds multiple states including an actual os pipe (alongside file descriptors) and a couple of buffers
@@ -78,7 +99,7 @@ class Pipe:
                     size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
                     header_size = 5
                     remaining = len(self.tail_buf) - ptx
-                    frame_len = header_size + 4092
+                    frame_len = header_size + size
                     if size == 0:
                         print("nothing to read, breaking from loop")
                         break
@@ -97,6 +118,12 @@ class Pipe:
             # if we've traversed a frame, or found out an incomplete one, let's flush the buffer
             del self.tail_buf[0:ptx]
         return self.ready_buf.popleft()
+
+    def close_read(self):
+        os.close(self.r)
+
+    def close_write(self):
+        os.close(self.w)
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
