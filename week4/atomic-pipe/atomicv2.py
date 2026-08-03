@@ -56,9 +56,11 @@ class Pipe:
                     header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
                     id = header & ((1 << 22) - 1)
                     header_size = 3
-                    # if the tail buffer has 4092 bytes worth of data:
-                    if len(self.tail_buf[header_size:]) < 4092:
+                    remaining = len(self.tail_buf) - ptx
+                    frame_len = header_size + 4092
+                    if remaining < frame_len:
                         break
+                    # if the tail buffer has 4092 bytes worth of data:
                     # only commit the pointer when a frame is confirmed
                     ptx += 3
                     # if not, we have a complete frame
@@ -75,10 +77,12 @@ class Pipe:
                     id = header & ((1 << 22) - 1)
                     size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
                     header_size = 5
+                    remaining = len(self.tail_buf) - ptx
+                    frame_len = header_size + 4092
                     if size == 0:
                         print("nothing to read, breaking from loop")
                         break
-                    if len(self.tail_buf[header_size : header_size + size]) < size:
+                    if remaining < frame_len:
                         break
                     # only commit the pointer when a frame is confirmed
                     ptx += 5
