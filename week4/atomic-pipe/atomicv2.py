@@ -34,7 +34,7 @@ class Pipe:
     Read is much more complicated, it needs to reassemble the interleaved messages and provide complete messages to the user
     """
 
-    def read(self) -> list:
+    def read(self) -> (int, list):
         # step 1: read from the os.read()
         buf = os.read(self.r, 4092)
         if len(buf) < 1:
@@ -47,7 +47,7 @@ class Pipe:
             # check for a 3 byte header
             first = self.tail_buf[ptx]
             last_bit = first >> 6 and 1
-            if len(self.tail_buf) < 3:
+            if len(self.tail_buf[ptx:]) < 3:
                 # we don't have enough to read the header
                 break
             if not last_bit:
@@ -59,12 +59,12 @@ class Pipe:
                     break
                 # if not, we have a complete frame
                 if id in self.accumulator:
-                    self.accumulator[id].append(self.tail_buf[ptx : ptx + 4092])
+                    self.accumulator[id].extend(self.tail_buf[ptx : ptx + 4092])
                 else:
                     self.accumulator[id] = self.tail_buf[ptx : ptx + 4092]
                 ptx += 4092
             else:
-                if len(self.tail_buf) < 5:
+                if len(self.tail_buf[ptx:]) < 5:
                     break
                 # the header is 5 bytes
                 header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
@@ -78,12 +78,15 @@ class Pipe:
                 if len(self.tail_buf[ptx : ptx + size]) < size:
                     break
                 if id in self.accumulator:
-                    self.accumulator[id].append(self.tail_buf[ptx : ptx + size])
+                    self.accumulator[id].extend(self.tail_buf[ptx : ptx + size])
                 else:
                     self.accumulator[id] = self.tail_buf[ptx : ptx + size]
                 ptx += size
-
-        return []
+                # if I am writing a terminal/last frame, I can push the entire message to the ready output queue
+                self.ready_buf.append((id, self.accumulator[id]))
+        # if we've traversed a frame, or found out an incomplete one, let's flush the buffer
+        del self.tail_buf[0 : ptx + 1]
+        return self.ready_buf.popleft()
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
