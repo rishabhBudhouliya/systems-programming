@@ -127,6 +127,7 @@ class Pipe:
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
+    limit = 4092
     messages = []
     if len(data) > limit:
         chunk = [0] * 4092
