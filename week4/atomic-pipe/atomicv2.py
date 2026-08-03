@@ -39,6 +39,7 @@ class Pipe:
         buf = os.read(self.r, 4092)
         if len(buf) < 1:
             print(f"Buffer is invalid: {len(buf)}")
+            return None
         self.tail_buf.extend(buf)
         # step 2: do I have a complete frame? if not, return with an empty message
         ptx = 0
@@ -52,11 +53,12 @@ class Pipe:
                 break
             if not last_bit:
                 header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
-                ptx += 3
                 id = header & ((1 << 22) - 1)
                 # if the tail buffer has 4092 bytes worth of data:
                 if len(self.tail_buf[ptx:]) < 4092:
                     break
+                # only commit the pointer when a frame is confirmed
+                ptx += 3
                 # if not, we have a complete frame
                 if id in self.accumulator:
                     self.accumulator[id].extend(self.tail_buf[ptx : ptx + 4092])
@@ -68,15 +70,15 @@ class Pipe:
                     break
                 # the header is 5 bytes
                 header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
-                ptx += 3
                 id = header & ((1 << 22) - 1)
                 size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
-                ptx += 2
                 if size == 0:
                     print("nothing to read, breaking from loop")
                     break
                 if len(self.tail_buf[ptx : ptx + size]) < size:
                     break
+                # only commit the pointer when a frame is confirmed
+                ptx += 5
                 if id in self.accumulator:
                     self.accumulator[id].extend(self.tail_buf[ptx : ptx + size])
                 else:
@@ -84,9 +86,13 @@ class Pipe:
                 ptx += size
                 # if I am writing a terminal/last frame, I can push the entire message to the ready output queue
                 self.ready_buf.append((id, self.accumulator[id]))
+                del self.accumulator[id]
         # if we've traversed a frame, or found out an incomplete one, let's flush the buffer
-        del self.tail_buf[0 : ptx + 1]
-        return self.ready_buf.popleft()
+        del self.tail_buf[0:ptx]
+        if len(self.ready_buf) == 0:
+            self.read()
+        else:
+            return self.ready_buf.popleft()
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
