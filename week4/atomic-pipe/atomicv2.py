@@ -1,6 +1,8 @@
 import os
 from collections import deque
 
+PIPE_LIMIT = 4091
+
 
 class Message:
     def __init__(self, id: int, last: int, payload: bytes):
@@ -33,7 +35,7 @@ class Pipe:
         self.tail_buf = []
         self.accumulator = {}
         self.ready_buf = deque()
-        self.PIPE_LIMIT = 4093
+        self.PIPE_LIMIT = PIPE_LIMIT
         self.BUF_LIMIT = 4096  # TODO make this configurable from fnctl
 
     """
@@ -42,7 +44,7 @@ class Pipe:
 
     def write(self, id: int, data: bytes):
         # step 1: distribute the byte stream into messages
-        messages = chunk(id, data, self.BUF_LIMIT)
+        messages = chunk(id, data)
         # step 2: write the messages to the actual pipe
         for message in messages:
             try:
@@ -59,7 +61,7 @@ class Pipe:
     def read(self) -> (int, list):
         # step 1: read from the os.read()
         while len(self.ready_buf) == 0:
-            buf = os.read(self.r, 4092)
+            buf = os.read(self.r, PIPE_LIMIT)
             if len(buf) < 1:
                 print(f"Buffer is invalid: {len(buf)}")
                 break
@@ -79,7 +81,7 @@ class Pipe:
                     id = header & ((1 << 22) - 1)
                     header_size = 3
                     remaining = len(self.tail_buf) - ptx
-                    frame_len = header_size + 4092
+                    frame_len = header_size + self.PIPE_LIMIT
                     if remaining < frame_len:
                         break
                     # if the tail buffer has 4092 bytes worth of data:
@@ -87,10 +89,14 @@ class Pipe:
                     ptx += 3
                     # if not, we have a complete frame
                     if id in self.accumulator:
-                        self.accumulator[id].extend(self.tail_buf[ptx : ptx + 4092])
+                        self.accumulator[id].extend(
+                            self.tail_buf[ptx : ptx + self.PIPE_LIMIT]
+                        )
                     else:
-                        self.accumulator[id] = self.tail_buf[ptx : ptx + 4092]
-                    ptx += 4092
+                        self.accumulator[id] = self.tail_buf[
+                            ptx : ptx + self.PIPE_LIMIT
+                        ]
+                    ptx += self.PIPE_LIMIT
                 else:
                     if len(self.tail_buf[ptx:]) < 5:
                         break
@@ -127,18 +133,20 @@ class Pipe:
         os.close(self.w)
 
 
-def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
-    limit = 4093
+def chunk(pid: int, data: bytes) -> list[bytes]:
     messages = []
-    if len(data) > limit:
-        chunk = [0] * 4093
-        while len(data) > limit:
-            chunk = data[:4093]
+    # let's say we have 10000 bytes
+    remaining = len(data)
+    if remaining > PIPE_LIMIT:
+        chunk = [0] * PIPE_LIMIT
+        while remaining > PIPE_LIMIT:
+            chunk = data[:PIPE_LIMIT]
             message = Message(pid, 0, chunk).convert()
             print(f"chunk is writing {len(message)} worth of message into messagaes")
             messages.append(message)
-            data = data[4093:]
-    if len(data) != 0:
+            data = data[PIPE_LIMIT:]
+            remaining = len(data)
+    if remaining != 0:
         # for the last payload, the header needs two more bytes
         m = Message(pid, 1, data).convert()
         messages.append(m)

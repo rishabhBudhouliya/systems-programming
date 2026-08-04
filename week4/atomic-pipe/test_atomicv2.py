@@ -87,7 +87,7 @@ def build_stream(specs):
     its terminal frame lands, so completion order follows the stream, not the
     order the writers were listed.
     """
-    per_writer = [(wid, payload, chunk(wid, payload, LIMIT)) for wid, payload in specs]
+    per_writer = [(wid, payload, chunk(wid, payload)) for wid, payload in specs]
 
     stream = bytearray()
     expected = []
@@ -198,7 +198,7 @@ def test_size_sweep():
     failures = []
     for n in SWEEP_SIZES:
         payload = bytes([(n % 26) + 65]) * n
-        frames = chunk(SWEEP_ID, payload, LIMIT)
+        frames = chunk(SWEEP_ID, payload)
         problems = []
 
         # a) every frame must fit the atomicity budget, or the kernel is free
@@ -206,8 +206,7 @@ def test_size_sweep():
         oversize = [(i, len(f)) for i, f in enumerate(frames) if len(f) > LIMIT]
         if oversize:
             problems.append(
-                "frames over PIPE_BUF: "
-                + ", ".join(f"#{i}={ln}" for i, ln in oversize)
+                "frames over PIPE_BUF: " + ", ".join(f"#{i}={ln}" for i, ln in oversize)
             )
 
         # b) exactly one terminal frame, and it must be last
