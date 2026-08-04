@@ -33,6 +33,7 @@ class Pipe:
         self.tail_buf = []
         self.accumulator = {}
         self.ready_buf = deque()
+        self.PIPE_LIMIT = 4093
         self.BUF_LIMIT = 4096  # TODO make this configurable from fnctl
 
     """
@@ -47,7 +48,7 @@ class Pipe:
             try:
                 # TODO: detect partial writes (from man page: All n bytes are written atomically; write(2) may block if
                 # there is not room for n bytes to be written immediately)
-                os.write(self.w, data)
+                os.write(self.w, message)
             except Exception as e:
                 print(f"Write failed due to :{e}")
 
@@ -61,7 +62,7 @@ class Pipe:
             buf = os.read(self.r, 4092)
             if len(buf) < 1:
                 print(f"Buffer is invalid: {len(buf)}")
-                continue
+                break
             self.tail_buf.extend(buf)
             # step 2: do I have a complete frame? if not, return with an empty message
             ptx = 0
@@ -96,7 +97,7 @@ class Pipe:
                     # the header is 5 bytes
                     header = int.from_bytes(self.tail_buf[ptx : ptx + 3], "big")
                     id = header & ((1 << 22) - 1)
-                    size = int.from_bytes(self.tail_buf[ptx : ptx + 2], "big")
+                    size = int.from_bytes(self.tail_buf[ptx + 3 : ptx + 5], "big")
                     header_size = 5
                     remaining = len(self.tail_buf) - ptx
                     frame_len = header_size + size
@@ -127,16 +128,16 @@ class Pipe:
 
 
 def chunk(pid: int, data: bytes, limit: int) -> list[bytes]:
-    limit = 4092
+    limit = 4093
     messages = []
     if len(data) > limit:
-        chunk = [0] * 4092
+        chunk = [0] * 4093
         while len(data) > limit:
-            chunk = data[:4092]
+            chunk = data[:4093]
             message = Message(pid, 0, chunk).convert()
             print(f"chunk is writing {len(message)} worth of message into messagaes")
             messages.append(message)
-            data = data[4092:]
+            data = data[4093:]
     if len(data) != 0:
         # for the last payload, the header needs two more bytes
         m = Message(pid, 1, data).convert()
