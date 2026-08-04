@@ -1,0 +1,8 @@
+    Updating crates.io index
+warning: failed to write cache, path: /usr/share/cs644/cargo/registry/index/index.crates.io-1949cf8c6b5b557f/.cache/ru/st/rustix, error: Permission denied (os error 13)
+ Downloading crates ...
+  Downloaded errno v0.3.14
+error: failed to create directory `/usr/share/cs644/cargo/registry/cache/index.crates.io-1949cf8c6b5b557f`
+
+Caused by:
+  Permission denied (os error 13)
