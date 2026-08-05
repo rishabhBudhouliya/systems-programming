@@ -54,8 +54,8 @@ impl<'a> Message<'a> {
 }
 
 struct Pipe {
-    r: PipeReader,
-    w: PipeWriter,
+    r: Option<PipeReader>,
+    w: Option<PipeWriter>,
     tail_buffer: Vec<u8>,
     accumulator: HashMap<u32, Vec<u8>>,
     ready_buffer: VecDeque<(u32, Vec<u8>)>,
@@ -63,10 +63,10 @@ struct Pipe {
 
 impl Pipe {
     pub fn new() -> Result<Pipe> {
-        let (r, w) = pipe()?;
+        let (r, w) = pipe().expect("couldn't create an os pipe");
         Ok(Pipe {
-            r,
-            w,
+            r: Some(r),
+            w: Some(w),
             tail_buffer: Vec::new(),
             accumulator: HashMap::new(),
             ready_buffer: VecDeque::new(),
@@ -78,7 +78,7 @@ impl Pipe {
         // step 1: chunk the data stream
         let messages = chunk(id, data);
         for message in messages {
-            let written_len = self.w.write(&message);
+            let written_len = self.w.as_mut().unwrap().write(&message);
             assert_eq!(written_len.unwrap(), message.len());
         }
     }
@@ -87,9 +87,17 @@ impl Pipe {
         // step 1: read a certain size of buffer into memory and put it in the tail buffer
         while self.ready_buffer.len() == 0 {
             let mut buffer = vec![0u8; 4096];
-            let n = self.r.read(&mut buffer).expect("read failed");
+            let n = self
+                .r
+                .as_mut()
+                .unwrap()
+                .read(&mut buffer)
+                .expect("read failed");
             if n == 0 {
                 // EOF
+                if self.accumulator.len() != 0 {
+                    panic!("EOF before processing accumulator");
+                }
                 return None;
             }
             self.tail_buffer.extend(&buffer[..n]);
@@ -163,6 +171,14 @@ impl Pipe {
             self.tail_buffer.drain(..ptx);
         }
         return self.ready_buffer.pop_front();
+    }
+
+    pub fn close_read(&mut self) {
+        drop(self.r.take());
+    }
+
+    pub fn close_write(&mut self) {
+        drop(self.w.take())
     }
 }
 
@@ -241,5 +257,23 @@ mod tests {
         // The last-bit is bit 22 of the 3-byte header == bit 6 of header byte 0.
         let last_bits: Vec<u8> = frames.iter().map(|f| (f[0] >> 6) & 1).collect();
         assert_eq!(vec![0, 0, 1], last_bits);
+    }
+
+    // Varying bytes, so a reordered or dropped chunk is visible.
+    fn varying(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
+    // Frames are 4094 bytes, reads are 4096 -> the reader is out of phase from
+    // the very first read. This is the case that stayed hidden in the Python.
+    #[test]
+    fn test_roundtrip_misaligned() {
+        let payload = varying(10000);
+        let mut p = Pipe::new().unwrap();
+        p.write(7, &payload);
+        let (id, got) = p.read().expect("expected one complete message");
+        assert_eq!(7, id);
+        assert_eq!(payload.len(), got.len());
+        assert_eq!(payload, got);
     }
 }
