@@ -12,24 +12,22 @@ use std::io::Result;
 use std::io::Write;
 use std::io::pipe;
 
+const PIPE_BUF: usize = 512;
+const HEADER: usize = 3;
+const SIZE_FIELD: usize = 2;
+const PAYLOAD_MAX: usize = PIPE_BUF - HEADER - SIZE_FIELD;
+
 struct Message<'a> {
     // process id, u32 should fit 2^22 ids
     id: u32,
     last: u8,
     payload: &'a [u8],
-    limit: usize,
 }
 
 // returned Message is tired to this payload
 impl<'a> Message<'a> {
     pub fn new(id: u32, last: u8, payload: &'a [u8]) -> Message<'a> {
-        let limit = 4096;
-        Message {
-            id,
-            last,
-            payload,
-            limit,
-        }
+        Message { id, last, payload }
     }
 
     // think of the frame buffer as a Vec<u8> instead of a fixed sized array
@@ -44,7 +42,7 @@ impl<'a> Message<'a> {
             buffer.extend(self.payload);
             return buffer;
         } else {
-            let mut buffer = Vec::with_capacity(4096);
+            let mut buffer = Vec::with_capacity(PIPE_BUF);
             // we need to slice the first byte to keep 3 bytes
             buffer.extend(&word[1..]);
             buffer.extend(self.payload);
@@ -53,12 +51,18 @@ impl<'a> Message<'a> {
     }
 }
 
-struct Pipe {
+pub struct Pipe {
     r: Option<PipeReader>,
     w: Option<PipeWriter>,
     tail_buffer: Vec<u8>,
     accumulator: HashMap<u32, Vec<u8>>,
     ready_buffer: VecDeque<(u32, Vec<u8>)>,
+    // Instrumentation only: the id of every frame in the order it was parsed off
+    // the wire. If writers actually interleaved, this alternates between ids.
+    pub frame_order: Vec<u32>,
+    // Bytes requested per underlying read(2). Frame boundaries are independent of
+    // this, so correctness must not depend on it -- tests sweep it.
+    pub read_size: usize,
 }
 
 impl Pipe {
@@ -70,6 +74,8 @@ impl Pipe {
             tail_buffer: Vec::new(),
             accumulator: HashMap::new(),
             ready_buffer: VecDeque::new(),
+            frame_order: Vec::new(),
+            read_size: PIPE_BUF,
         })
     }
 
@@ -86,7 +92,7 @@ impl Pipe {
     pub fn read(&mut self) -> Option<(u32, Vec<u8>)> {
         // step 1: read a certain size of buffer into memory and put it in the tail buffer
         while self.ready_buffer.len() == 0 {
-            let mut buffer = vec![0u8; 4096];
+            let mut buffer = vec![0u8; self.read_size];
             let n = self
                 .r
                 .as_mut()
@@ -120,7 +126,7 @@ impl Pipe {
                     // it's a continuation frame
                     // first determine if we have a complete frame worth of data, i.e, 3 + 4191 = 4194 bytes
                     let remaining = self.tail_buffer.len() - ptx;
-                    let frame_len = 4094;
+                    let frame_len = HEADER + PAYLOAD_MAX;
                     if remaining < frame_len {
                         break;
                     }
@@ -132,9 +138,10 @@ impl Pipe {
                     ]);
                     let id = header & ((1 << 22) - 1);
                     ptx += 3;
-                    let payload = &self.tail_buffer[ptx..ptx + 4091];
+                    let payload = &self.tail_buffer[ptx..ptx + PAYLOAD_MAX];
                     self.accumulator.entry(id).or_default().extend(payload);
-                    ptx += 4091;
+                    ptx += PAYLOAD_MAX;
+                    self.frame_order.push(id);
                 } else {
                     let remaining = self.tail_buffer.len() - ptx;
                     if remaining < 5 {
@@ -163,6 +170,7 @@ impl Pipe {
                     let payload = &self.tail_buffer[ptx..ptx + size];
                     self.accumulator.entry(id).or_default().extend(payload);
                     ptx += size;
+                    self.frame_order.push(id);
                     self.ready_buffer
                         .push_back((id, self.accumulator.remove(&id).unwrap()));
                     // now we need to drain the tail buffer and accumulator
@@ -190,10 +198,10 @@ pub fn chunk(pid: u32, mut data: &[u8]) -> Vec<Vec<u8>> {
     // create continuation frames and terminal frames
     let mut messages: Vec<Vec<u8>> = Vec::new();
     let mut remaining = data.len();
-    while remaining > 4091 {
-        let m = Message::new(pid, 0, &data[..4091]);
+    while remaining > PAYLOAD_MAX {
+        let m = Message::new(pid, 0, &data[..PAYLOAD_MAX]);
         messages.push(m.convert());
-        data = &data[4091..];
+        data = &data[PAYLOAD_MAX..];
         remaining = data.len();
     }
     if remaining != 0 {
@@ -237,26 +245,36 @@ mod tests {
     #[test]
     fn test_chunk_large() {
         let id = 22561;
-        let payload = vec![65u8; 10000];
+        const N: usize = 10000;
+        let payload = vec![65u8; N];
         let frames = chunk(id, &payload);
-        assert_eq!(3, frames.len());
-        assert_eq!(4094, frames[0].len());
-        assert_eq!(4094, frames[1].len());
-        assert_eq!(1823, frames[2].len());
+
+        // Derived from the constants, not hardcoded: every continuation frame is
+        // full (it carries no length field), so the terminal frame takes the rest.
+        let conts = (N - 1) / PAYLOAD_MAX;
+        let tail = N - conts * PAYLOAD_MAX;
+        assert_eq!(conts + 1, frames.len());
+        for f in &frames[..conts] {
+            assert_eq!(HEADER + PAYLOAD_MAX, f.len());
+        }
+        assert_eq!(HEADER + SIZE_FIELD + tail, frames[conts].len());
 
         // The guarantee the whole project exists for: no single write() exceeds PIPE_BUF.
         for f in &frames {
             assert!(
-                f.len() <= 4096,
-                "frame of {} bytes exceeds PIPE_BUF",
-                f.len()
+                f.len() <= PIPE_BUF,
+                "frame of {} bytes exceeds PIPE_BUF {}",
+                f.len(),
+                PIPE_BUF
             );
         }
 
         // Exactly one terminal frame, and it is the last one.
         // The last-bit is bit 22 of the 3-byte header == bit 6 of header byte 0.
         let last_bits: Vec<u8> = frames.iter().map(|f| (f[0] >> 6) & 1).collect();
-        assert_eq!(vec![0, 0, 1], last_bits);
+        let mut want = vec![0u8; conts];
+        want.push(1);
+        assert_eq!(want, last_bits);
     }
 
     // Varying bytes, so a reordered or dropped chunk is visible.
@@ -264,8 +282,8 @@ mod tests {
         (0..n).map(|i| (i % 251) as u8).collect()
     }
 
-    // Frames are 4094 bytes, reads are 4096 -> the reader is out of phase from
-    // the very first read. This is the case that stayed hidden in the Python.
+    // Continuation frames are 510 bytes, reads are PIPE_BUF (512) -> the reader is
+    // out of phase from the very first read. This is what stayed hidden in Python.
     #[test]
     fn test_roundtrip_misaligned() {
         let payload = varying(10000);
@@ -275,5 +293,71 @@ mod tests {
         assert_eq!(7, id);
         assert_eq!(payload.len(), got.len());
         assert_eq!(payload, got);
+    }
+
+    // The central claim: reassembly is independent of where read(2) happens to cut
+    // the stream. Sweep read sizes across and around every frame boundary.
+    #[test]
+    fn test_split_invariance() {
+        const N: usize = 10000;
+        let payload = varying(N);
+        for &rs in &[
+            1,
+            2,
+            3,
+            5,
+            7,
+            HEADER + SIZE_FIELD - 1,
+            PAYLOAD_MAX - 1,
+            PAYLOAD_MAX,
+            HEADER + PAYLOAD_MAX - 1,
+            HEADER + PAYLOAD_MAX,
+            HEADER + PAYLOAD_MAX + 1,
+            PIPE_BUF,
+            PIPE_BUF + 1,
+            1023,
+            4096,
+        ] {
+            let mut p = Pipe::new().unwrap();
+            p.read_size = rs;
+            p.write(9, &payload);
+            p.close_write();
+
+            let mut msgs = Vec::new();
+            while let Some((id, msg)) = p.read() {
+                assert_eq!(9, id, "read_size {}", rs);
+                msgs.push(msg);
+            }
+            assert_eq!(1, msgs.len(), "read_size {}: expected one message", rs);
+            assert_eq!(payload, msgs[0], "read_size {}: payload mismatch", rs);
+        }
+    }
+
+    // Two writers' frames interleaved by hand, so the per-id accumulator is
+    // exercised deterministically rather than by scheduler luck.
+    #[test]
+    fn test_interleaved_writers() {
+        const N: usize = 3000;
+        let a = varying(N);
+        let b: Vec<u8> = varying(N).iter().map(|x| x ^ 0xff).collect();
+        let fa = chunk(11, &a);
+        let fb = chunk(22, &b);
+        assert_eq!(fa.len(), fb.len());
+
+        let mut p = Pipe::new().unwrap();
+        p.read_size = 7;
+        for (x, y) in fa.iter().zip(fb.iter()) {
+            p.w.as_mut().unwrap().write_all(x).unwrap();
+            p.w.as_mut().unwrap().write_all(y).unwrap();
+        }
+        p.close_write();
+
+        let mut got = HashMap::new();
+        while let Some((id, msg)) = p.read() {
+            assert!(got.insert(id, msg).is_none(), "duplicate id {}", id);
+        }
+        assert_eq!(2, got.len());
+        assert_eq!(&a, got.get(&11).unwrap());
+        assert_eq!(&b, got.get(&22).unwrap());
     }
 }
