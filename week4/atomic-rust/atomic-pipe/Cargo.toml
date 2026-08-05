@@ -4,4 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rustix = "1.1.4"
+libc = "0.2.189"
+
+[features]
+# The reader's *framed* path needs Pipe::reader_on_stdin(), which does not exist in
+# src/pipe.rs yet. Only that path is gated -- raw mode builds and runs today. This
+# keeps `cargo test` green until the constructor lands; see demo/HANDOFF.md.
+stdio-pipe = []
