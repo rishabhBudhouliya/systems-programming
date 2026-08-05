@@ -4,6 +4,13 @@
  * 2) start writing the pipe code
  * 3) add a test file that tests the pipe code
  */
+use std::collections::{HashMap, VecDeque};
+use std::io::PipeReader;
+use std::io::PipeWriter;
+use std::io::Read;
+use std::io::Result;
+use std::io::Write;
+use std::io::pipe;
 
 struct Message<'a> {
     // process id, u32 should fit 2^22 ids
@@ -43,6 +50,119 @@ impl<'a> Message<'a> {
             buffer.extend(self.payload);
             return buffer;
         }
+    }
+}
+
+struct Pipe {
+    r: PipeReader,
+    w: PipeWriter,
+    tail_buffer: Vec<u8>,
+    accumulator: HashMap<u32, Vec<u8>>,
+    ready_buffer: VecDeque<(u32, Vec<u8>)>,
+}
+
+impl Pipe {
+    pub fn new() -> Result<Pipe> {
+        let (r, w) = pipe()?;
+        Ok(Pipe {
+            r,
+            w,
+            tail_buffer: Vec::new(),
+            accumulator: HashMap::new(),
+            ready_buffer: VecDeque::new(),
+        })
+    }
+
+    // we need to think about two apis, read and write
+    pub fn write(&mut self, id: u32, data: &[u8]) {
+        // step 1: chunk the data stream
+        let messages = chunk(id, data);
+        for message in messages {
+            let written_len = self.w.write(&message);
+            assert_eq!(written_len.unwrap(), message.len());
+        }
+    }
+
+    pub fn read(&mut self) -> Option<(u32, Vec<u8>)> {
+        // step 1: read a certain size of buffer into memory and put it in the tail buffer
+        while self.ready_buffer.len() == 0 {
+            let mut buffer = vec![0u8; 4096];
+            let n = self.r.read(&mut buffer).expect("read failed");
+            if n == 0 {
+                // EOF
+                return None;
+            }
+            self.tail_buffer.extend(&buffer[..n]);
+            // step 2: maintain invariant: anything coming out of the tail buffer must be a complete frame, be it
+            // continutation or terminal
+            let mut ptx = 0;
+            while ptx < self.tail_buffer.len() {
+                if self.tail_buffer.len() < 1 {
+                    // nothing to extract
+                    // is EOF as well
+                    break;
+                }
+                let first_byte = self.tail_buffer[ptx];
+                let last_bit = first_byte >> 6 == 1;
+                if self.tail_buffer[ptx..].len() < 3 {
+                    // doesn't have a header worth of data
+                    break;
+                }
+                if !last_bit {
+                    // it's a continuation frame
+                    // first determine if we have a complete frame worth of data, i.e, 3 + 4191 = 4194 bytes
+                    let remaining = self.tail_buffer.len() - ptx;
+                    let frame_len = 4094;
+                    if remaining < frame_len {
+                        break;
+                    }
+                    let header = u32::from_be_bytes([
+                        0,
+                        self.tail_buffer[ptx],
+                        self.tail_buffer[ptx + 1],
+                        self.tail_buffer[ptx + 2],
+                    ]);
+                    let id = header & ((1 << 22) - 1);
+                    ptx += 3;
+                    let payload = &self.tail_buffer[ptx..ptx + 4091];
+                    self.accumulator.entry(id).or_default().extend(payload);
+                    ptx += 4091;
+                } else {
+                    let remaining = self.tail_buffer.len() - ptx;
+                    if remaining < 5 {
+                        // we need a 5 byte worth of header + size data atleast
+                        break;
+                    }
+                    let header = u32::from_be_bytes([
+                        0,
+                        self.tail_buffer[ptx],
+                        self.tail_buffer[ptx + 1],
+                        self.tail_buffer[ptx + 2],
+                    ]);
+                    let id = header & ((1 << 22) - 1);
+                    let size = (u16::from_be_bytes([
+                        self.tail_buffer[ptx + 3],
+                        self.tail_buffer[ptx + 4],
+                    ])) as usize;
+                    if size == 0 {
+                        break;
+                    }
+                    if remaining < 5 + size {
+                        // don't have enough data to read
+                        break;
+                    }
+                    ptx += 5;
+                    let payload = &self.tail_buffer[ptx..ptx + size];
+                    self.accumulator.entry(id).or_default().extend(payload);
+                    ptx += size;
+                    self.ready_buffer
+                        .push_back((id, self.accumulator.remove(&id).unwrap()));
+                    // now we need to drain the tail buffer and accumulator
+                }
+            }
+            self.tail_buffer.drain(..ptx);
+        }
+        return self.ready_buffer.pop_front();
     }
 }
 
@@ -110,7 +230,11 @@ mod tests {
 
         // The guarantee the whole project exists for: no single write() exceeds PIPE_BUF.
         for f in &frames {
-            assert!(f.len() <= 4096, "frame of {} bytes exceeds PIPE_BUF", f.len());
+            assert!(
+                f.len() <= 4096,
+                "frame of {} bytes exceeds PIPE_BUF",
+                f.len()
+            );
         }
 
         // Exactly one terminal frame, and it is the last one.
