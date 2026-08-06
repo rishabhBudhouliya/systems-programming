@@ -88,10 +88,18 @@ if ! command -v perl >/dev/null 2>&1; then
     bad "perl not found"
 else
     pass "perl $(perl -e 'print $^V')"
+    # Same vendored-copy lookup that bench_perl.sh does, so both agree.
+    root=$(cd "$(dirname "$0")/.." && pwd)
+    for d in "$root"/demo/vendor/Atomic-Pipe-*/lib; do
+        [ -d "$d" ] && export PERL5LIB="$d${PERL5LIB:+:$PERL5LIB}"
+    done
     if perl -MAtomic::Pipe -e1 >/dev/null 2>&1; then
         pass "Atomic::Pipe $(perl -MAtomic::Pipe -e 'print $Atomic::Pipe::VERSION')"
     else
-        bad "Atomic::Pipe not installed. Run: cpanm Atomic::Pipe   (or: cpan Atomic::Pipe)"
+        # Not a sudo problem: it is pure Perl on core deps only. cpan fails here
+        # because it tries to build the *recommended* Compress::Zstd, which the
+        # benchmark never uses.
+        bad "Atomic::Pipe not importable. No root needed -- run: ./demo/vendor_perl.sh"
     fi
 fi
 

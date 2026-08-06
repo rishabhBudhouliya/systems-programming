@@ -8,8 +8,14 @@ TOTAL=${TOTAL_BYTES:-$((256 * 1024 * 1024))}
 MSG=${MESSAGE_BYTES:-$((1024 * 1024))}
 REPS=${REPS:-5}
 
+# Pick up a no-root vendored copy if demo/vendor_perl.sh has been run.
+for d in demo/vendor/Atomic-Pipe-*/lib; do
+    [ -d "$d" ] && export PERL5LIB="$PWD/$d${PERL5LIB:+:$PERL5LIB}"
+done
+
 if ! perl -MAtomic::Pipe -e1 >/dev/null 2>&1; then
-    echo "Atomic::Pipe is not installed. Run: cpanm Atomic::Pipe" >&2
+    echo "Atomic::Pipe is not importable." >&2
+    echo "No root needed -- it is pure Perl on core deps. Run: ./demo/vendor_perl.sh" >&2
     exit 1
 fi
 
